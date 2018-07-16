@@ -1,5 +1,11 @@
 unit RingBuffer;
 
+{$IFDEF FPC}
+  {$MODE ObjFPC}{$H+}
+  {$DEFINE FPC_DisableWarns}
+  {$MACRO ON}
+{$ENDIF}
+
 interface
 
 uses
@@ -48,6 +54,12 @@ implementation
 
 uses
   SysUtils;
+
+{$IFDEF FPC_DisableWarns}
+  {$DEFINE FPCDWM}
+  {$DEFINE W4055:={$WARN 4055 OFF}} // Conversion between ordinals and pointers is not portable
+  {$DEFINE W4056:={$WARN 4056 OFF}} // Conversion between ordinals and pointers is not portable
+{$ENDIF}
 
 Function TRingBuffer.DoOverwrite(Count: TMemSize): Boolean;
 begin
@@ -107,23 +119,29 @@ If Count > 0 then
         Overwrite := Count > FreeSpace;
         If Overwrite then
           If not DoOverwrite(Count - FreeSpace) then Exit;
+      {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
         HighWriteSpace := TMemSize(PtrUInt(fSize) - (PtrUInt(fWritePtr) - PtrUInt(fMemory)));
+      {$IFDEF FPCDWM}{$POP}{$ENDIF}
         // will it fit without splitting?
         If Count <= HighWriteSpace then
           begin
             // data will fit without splitting
             Move(Ptr^,fWritePtr^,Count);
+          {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
             fWritePtr := Pointer(PtrUInt(fWritePtr) + PtrUInt(Count));
             If PtrUInt(fWritePtr) >= (PtrUInt(fMemory) + PtrUInt(fSize)) then
               fWritePtr := fMemory;
+          {$IFDEF FPCDWM}{$POP}{$ENDIF}
             Result := Count;
           end
         else
           begin
             // splitting is required...
             Move(Ptr^,fWritePtr^,HighWriteSpace);
+          {$IFDEF FPCDWM}{$PUSH}W4055 W4056{$ENDIF}
             Move(Pointer(PtrUInt(Ptr) + HighWriteSpace)^,fMemory^,Count - HighWriteSpace);
             fWritePtr := Pointer(PtrUInt(fMemory) + (Count - HighWriteSpace));
+          {$IFDEF FPCDWM}{$POP}{$ENDIF}
             Result := Count;
           end;
       end
@@ -134,7 +152,9 @@ If Count > 0 then
           If not DoOverwrite(UsedSpace) then Exit;
         // passed data cannot fit into the buffer,
         // store only number of bytes from the end that can fit
+      {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
         Move(Pointer(PtrUInt(Ptr) + PtrUInt(Count - fSize))^,fMemory^,fSize);
+      {$IFDEF FPCDWM}{$POP}{$ENDIF}
         fWritePtr := fMemory;
         fReadPtr := fMemory;
         Result := fSize;
@@ -162,7 +182,9 @@ begin
 Result := 0;
 If Count > 0 then
   begin
+  {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
     HighReadCount := TMemSize(PtrUInt(fSize) - (PtrUInt(fReadPtr) - PtrUInt(fMemory)));
+  {$IFDEF FPCDWM}{$POP}{$ENDIF}
     UsedSpaceBytes := UsedSpace;
     If Count < UsedSpaceBytes then
       begin
@@ -170,12 +192,16 @@ If Count > 0 then
         If Count > HighReadCount then
           begin
             Move(fReadPtr^,Ptr^,HighReadCount);
+          {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
             Move(fMemory^,Pointer(PtrUInt(Ptr) + PtrUInt(HighReadCount))^,Count - HighReadCount);
+          {$IFDEF FPCDWM}{$POP}{$ENDIF}
           end
         else Move(fReadPtr^,Ptr^,Count);
+      {$IFDEF FPCDWM}{$PUSH}W4055 W4056{$ENDIF}
         fReadPtr := Pointer(PtrUInt(fReadPtr) + PtrUInt(Count));
         If PtrUInt(fReadPtr) >= (PtrUInt(fMemory) + PtrUInt(fSize)) then
           fReadPtr := Pointer(PtrUInt(fReadPtr) - PtrUInt(fSize));
+      {$IFDEF FPCDWM}{$POP}{$ENDIF}
         Result := Count;
       end
     else
@@ -184,7 +210,9 @@ If Count > 0 then
         If HighReadCount <> UsedSpaceBytes then
           begin
             Move(fReadPtr^,Ptr^,HighReadCount);
+          {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
             Move(fMemory^,Pointer(PtrUInt(Ptr) + PtrUInt(HighReadCount))^,UsedSpaceBytes - HighReadCount);
+          {$IFDEF FPCDWM}{$POP}{$ENDIF}
           end
         else Move(fReadPtr^,Ptr^,UsedSpaceBytes);
         fWritePtr := fMemory;
@@ -201,10 +229,12 @@ Function TRingBuffer.UsedSpace: TMemSize;
 begin
 If fWritePtr <> fReadPtr then
   begin
+  {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
     If PtrUInt(fWritePtr) > PtrUInt(fReadPtr) then
       Result := TMemSize(PtrUInt(fWritePtr) - PtrUInt(fReadPtr))
     else
       Result := TMemSize(PtrUInt(fSize) - (PtrUInt(fReadPtr) - PtrUInt(fWritePtr)));
+  {$IFDEF FPCDWM}{$POP}{$ENDIF}
   end
 else
   begin
