@@ -17,9 +17,6 @@
     AuxTypes   - github.com/ncs-sniper/Lib.AuxTypes
     AuxClasses - github.com/ncs-sniper/Lib.AuxClasses
 
-  ToDo:
-    - specialized buffers with word, long and pointer elements
-
 ===============================================================================}
 unit RingBuffer;
 
