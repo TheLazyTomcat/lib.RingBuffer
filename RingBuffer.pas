@@ -1,3 +1,26 @@
+{-------------------------------------------------------------------------------
+
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+-------------------------------------------------------------------------------}
+{===============================================================================
+
+  Ring buffer (also known as circular buffer) classes
+
+  ©František Milt 2018-07-16
+
+  Version 1.0
+
+  Dependencies:
+    AuxTypes   - github.com/ncs-sniper/Lib.AuxTypes
+    AuxClasses - github.com/ncs-sniper/Lib.AuxClasses
+
+  ToDo:
+    - specialized buffers with word, long and pointer elements
+
+===============================================================================}
 unit RingBuffer;
 
 {$IFDEF FPC}
@@ -11,11 +34,21 @@ interface
 uses
   AuxTypes, AuxClasses;
 
+{===============================================================================
+--------------------------------------------------------------------------------
+                                   TRingBuffer
+--------------------------------------------------------------------------------
+===============================================================================}
+
 type
   TOverwriteBehavior = (obOverwrite,obDrop,obError);
 
   TOverwriteEvent = procedure(Sender: TObject; Count: TMemSize) of object;
   TOverwriteCallback = procedure(Sender: TObject; Count: TMemSize);
+
+{===============================================================================
+    TRingBuffer - class declaration
+===============================================================================}
 
   TRingBuffer = class(TCustomObject)
   private
@@ -61,6 +94,20 @@ uses
   {$DEFINE W4056:={$WARN 4056 OFF}} // Conversion between ordinals and pointers is not portable
 {$ENDIF}
 
+{===============================================================================
+--------------------------------------------------------------------------------
+                                   TRingBuffer
+--------------------------------------------------------------------------------
+===============================================================================}
+
+{===============================================================================
+    TRingBuffer - class implementation
+===============================================================================}
+
+{-------------------------------------------------------------------------------
+    TRingBuffer - protected methods
+-------------------------------------------------------------------------------}
+
 Function TRingBuffer.DoOverwrite(Count: TMemSize): Boolean;
 begin
 If Assigned(fOnOverwriteEvent) then
@@ -76,7 +123,9 @@ else
 end;
 end;
 
-//==============================================================================
+{-------------------------------------------------------------------------------
+    TRingBuffer - public methods
+-------------------------------------------------------------------------------}
 
 constructor TRingBuffer.Create(Size: TMemSize);
 begin
