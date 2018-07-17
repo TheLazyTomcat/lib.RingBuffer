@@ -7,7 +7,7 @@
 -------------------------------------------------------------------------------}
 {===============================================================================
 
-  Ring buffer (also known as circular buffer) classes
+  Ring buffer (also known as circular buffer)
 
   ©František Milt 2018-07-16
 
