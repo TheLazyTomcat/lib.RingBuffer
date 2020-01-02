@@ -7,21 +7,49 @@
 -------------------------------------------------------------------------------}
 {===============================================================================
 
-  Ring buffer (also known as circular buffer)
+  Ring buffer
 
-  ©František Milt 2018-07-16
+    Simple and naive implementation of general ring buffer, also known as
+    circular buffer. Currently the buffer is implemented as size-invariant.
 
-  Version 1.0
+    General buffer (TRingBuffer) can be used for any data as it operates on
+    bytes and pointers. But if you want to create a typed ring buffer, there
+    is a class TTypedRingBuffer created for that purpose. It should not be used
+    directly, it is provided only as a base for other typed buffers. Create
+    its descendant and implement it on type you want.
+
+    An integer ring buffer is implemented as a guideline for how to inherit
+    from TTypedRingBuffer and create specialized ring buffers.
+
+  Version 1.1 (2020-01-02)
+
+  Last change 2020-01-02
+
+  ©2018-2020 František Milt
+
+  Contacts:
+    František Milt: frantisek.milt@gmail.com
+
+  Support:
+    If you find this code useful, please consider supporting its author(s) by
+    making a small donation using the following link(s):
+
+      https://www.paypal.me/FMilt
+
+  Changelog:
+    For detailed changelog and history please refer to this git repository:
+
+      github.com/TheLazyTomcat/Lib.RingBuffer
 
   Dependencies:
-    AuxTypes   - github.com/ncs-sniper/Lib.AuxTypes
-    AuxClasses - github.com/ncs-sniper/Lib.AuxClasses
+    AuxTypes   - github.com/TheLazyTomcat/Lib.AuxTypes
+    AuxClasses - github.com/TheLazyTomcat/Lib.AuxClasses
 
 ===============================================================================}
 unit RingBuffer;
 
 {$IFDEF FPC}
-  {$MODE ObjFPC}{$H+}
+  {$MODE Delphi}
   {$DEFINE FPC_DisableWarns}
   {$MACRO ON}
 {$ENDIF}
@@ -29,6 +57,7 @@ unit RingBuffer;
 interface
 
 uses
+  SysUtils,
   AuxTypes, AuxClasses;
 
 {===============================================================================
@@ -43,10 +72,14 @@ type
   TOverwriteEvent = procedure(Sender: TObject; Count: TMemSize) of object;
   TOverwriteCallback = procedure(Sender: TObject; Count: TMemSize);
 
+  ERBException = class(Exception);
+
+  ERBOverwriteError = class(ERBException);
+
 {===============================================================================
     TRingBuffer - class declaration
 ===============================================================================}
-
+type
   TRingBuffer = class(TCustomObject)
   private
     fMemory:              Pointer;
@@ -62,10 +95,10 @@ type
   public
     constructor Create(Size: TMemSize);
     destructor Destroy; override;
-    Function Write(const Buff; Count: TMemSize): TMemSize; overload; virtual;
-    Function Write(Ptr: Pointer; Count: TMemSize): TMemSize; overload; virtual;
-    Function Read(out Buff; Count: TMemSize): TMemSize; overload; virtual;
-    Function Read(Ptr: Pointer; Count: TMemSize): TMemSize; overload; virtual;
+    Function WriteBuff(const Buff; Count: TMemSize): TMemSize; virtual;
+    Function WriteMem(Ptr: Pointer; Count: TMemSize): TMemSize; virtual;
+    Function ReadBuff(out Buff; Count: TMemSize): TMemSize; virtual;
+    Function ReadMem(Ptr: Pointer; Count: TMemSize): TMemSize; virtual;
     Function UsedSpace: TMemSize; virtual;
     Function FreeSpace: TMemSize; virtual;
     Function IsEmpty: Boolean; virtual;
@@ -80,10 +113,78 @@ type
     property OnOverwrite: TOverwriteEvent read fOnOverwriteEvent write fOnOverwriteEvent;
   end;
 
-implementation
+{===============================================================================
+--------------------------------------------------------------------------------
+                                TTypedRingBuffer
+--------------------------------------------------------------------------------
+===============================================================================}
 
-uses
-  SysUtils;
+type
+  TValueOverwriteEvent = procedure(Sender: TObject; Count: Integer) of object;
+  TValueOverwriteCallback = procedure(Sender: TObject; Count: Integer);
+
+  ETRBException = class(ERBException);
+
+{===============================================================================
+    TTypedRingBuffer - class declaration
+===============================================================================}
+type
+  TTypedRingBuffer = class(TRingBuffer)
+  private
+    fBaseTypeSize:              TMemSize;
+    fOnValueOverwriteEvent:     TValueOverwriteEvent;
+    fOnValueOverwriteCallback:  TValueOverwriteCallback;
+    Function GetCount: Integer;
+    Function GetWriteIndex: Integer;
+    Function GetReadIndex: Integer;
+  protected
+    Function DoOverwrite(Count: TMemSize): Boolean; override;
+  public
+    constructor Create(BaseTypeSize: TMemSize; Count: Integer);
+    Function UsedCount: Integer; virtual;
+    Function FreeCount: Integer; virtual;
+    property BaseTypeSize: TMemSize read fBaseTypeSize;
+    property Count: Integer read GetCount;
+    property WriteIndex: Integer read GetWriteIndex;
+    property ReadIndex: Integer read GetReadIndex;
+    property OnValueOverwriteEvent: TValueOverwriteEvent read fOnValueOverwriteEvent write fOnValueOverwriteEvent;
+    property OnValueOverwriteCallback: TValueOverwriteCallback read fOnValueOverwriteCallback write fOnValueOverwriteCallback;
+    property OnValueOverwrite: TValueOverwriteEvent read fOnValueOverwriteEvent write fOnValueOverwriteEvent;
+  end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                               TIntegerRingBuffer
+--------------------------------------------------------------------------------
+===============================================================================}
+
+type
+  EIRBException = class(ETRBException);
+
+  EIRBIndexOutOfBounds = class(EIRBException);
+  EIRBWriteError       = class(EIRBException);
+  EIRBReadError        = class(EIRBException);  
+
+{===============================================================================
+    TIntegerRingBuffer - class declaration
+===============================================================================}
+type
+  TIntegerRingBuffer = class(TTypedRingBuffer)
+  private
+    Function GetValue(Index: Integer): Integer;
+    procedure SetValue(Index: Integer; Value: Integer);
+  public
+    constructor Create(Count: Integer);
+    procedure Write(Value: Integer); overload; virtual;
+    Function Write(Values: PInteger; Count: Integer): Integer; overload; virtual;
+    Function Write(Values: array of Integer): Integer; overload; virtual;
+    Function Read: Integer; overload; virtual;
+    Function Read(out Value: Integer): Boolean; overload; virtual;
+    Function Read(Value: PInteger; Count: Integer): Integer; overload; virtual;
+    property Values[Index: Integer]: Integer read GetValue write SetValue; default;
+  end;
+
+implementation
 
 {$IFDEF FPC_DisableWarns}
   {$DEFINE FPCDWM}
@@ -96,11 +197,9 @@ uses
                                    TRingBuffer
 --------------------------------------------------------------------------------
 ===============================================================================}
-
 {===============================================================================
     TRingBuffer - class implementation
 ===============================================================================}
-
 {-------------------------------------------------------------------------------
     TRingBuffer - protected methods
 -------------------------------------------------------------------------------}
@@ -114,9 +213,9 @@ If Assigned(fOnOverwriteCallback) then
 case fOverwriteBehavior of
   obOverwrite:  Result := True;
   obDrop:       Result := False;
-  obError:      raise Exception.CreateFmt('TRingBuffer: Overwriting %d bytes',[Count]);
+  obError:      raise ERBOverwriteError.CreateFmt('TRingBuffer: Overwriting %d bytes',[Count]);
 else
-  raise Exception.CreateFmt('TRingBuffer.DoOverwrite: Invalid overwrite behavior (%d).',[Ord(fOverwriteBehavior)]);
+  raise ERBException.CreateFmt('TRingBuffer.DoOverwrite: Invalid overwrite behavior (%d).',[Ord(fOverwriteBehavior)]);
 end;
 end;
 
@@ -145,14 +244,14 @@ end;
 
 //------------------------------------------------------------------------------
 
-Function TRingBuffer.Write(const Buff; Count: TMemSize): TMemSize;
+Function TRingBuffer.WriteBuff(const Buff; Count: TMemSize): TMemSize;
 begin
-Result := Write(@Buff,Count);
+Result := WriteMem(@Buff,Count);
 end;
 
 //------------------------------------------------------------------------------
 
-Function TRingBuffer.Write(Ptr: Pointer; Count: TMemSize): TMemSize;
+Function TRingBuffer.WriteMem(Ptr: Pointer; Count: TMemSize): TMemSize;
 var
   Overwrite:      Boolean;
   HighWriteSpace: TMemSize;
@@ -213,20 +312,20 @@ end;
 
 //------------------------------------------------------------------------------
 
-Function TRingBuffer.Read(out Buff; Count: TMemSize): TMemSize;
+Function TRingBuffer.ReadBuff(out Buff; Count: TMemSize): TMemSize;
 begin
-Result := Read(@Buff,Count);
+Result := ReadMem(@Buff,Count);
 end;
 
 //------------------------------------------------------------------------------
 
-Function TRingBuffer.Read(Ptr: Pointer; Count: TMemSize): TMemSize;
+Function TRingBuffer.ReadMem(Ptr: Pointer; Count: TMemSize): TMemSize;
 var
   HighReadCount:  TMemSize;
   UsedSpaceBytes: TMemSize;
 begin
 Result := 0;
-If Count > 0 then
+If (Count > 0) and not IsEmpty then
   begin
   {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
     HighReadCount := TMemSize(PtrUInt(fSize) - (PtrUInt(fReadPtr) - PtrUInt(fMemory)));
@@ -264,7 +363,7 @@ If Count > 0 then
         fWritePtr := fMemory;
         fReadPtr := fMemory;
         fIsEmpty := True;
-        Result := fSize;
+        Result := UsedSpaceBytes;
       end;
   end;
 end;
@@ -310,6 +409,169 @@ end;
 Function TRingBuffer.IsFull: Boolean;
 begin
 Result := UsedSpace >= fSize;
+end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                                TTypedRingBuffer
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TTypedRingBuffer - class declaration
+===============================================================================}
+{-------------------------------------------------------------------------------
+    TTypedRingBuffer - private methods
+-------------------------------------------------------------------------------}
+
+Function TTypedRingBuffer.GetCount: Integer;
+begin
+Result := Integer(Size div fBaseTypeSize);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TTypedRingBuffer.GetWriteIndex: Integer;
+begin
+{$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
+Result := Integer((PtrUInt(WritePtr) - PtrUInt(Memory)) div fBaseTypeSize);
+{$IFDEF FPCDWM}{$POP}{$ENDIF}
+end;
+
+//------------------------------------------------------------------------------
+
+Function TTypedRingBuffer.GetReadIndex: Integer;
+begin
+{$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
+Result := Integer((PtrUInt(ReadPtr) - PtrUInt(Memory)) div fBaseTypeSize);
+{$IFDEF FPCDWM}{$POP}{$ENDIF}
+end;
+
+{-------------------------------------------------------------------------------
+    TTypedRingBuffer - protected methods
+-------------------------------------------------------------------------------}
+
+Function TTypedRingBuffer.DoOverwrite(Count: TMemSize): Boolean;
+begin
+If Assigned(fOnValueOverwriteEvent) then
+  fOnValueOverwriteEvent(Self,Count div fBaseTypeSize);
+If Assigned(fOnValueOverwriteCallback) then
+  fOnValueOverwriteCallback(Self,Count div fBaseTypeSize);
+Result := inherited DoOverwrite(Count);
+end;
+
+{-------------------------------------------------------------------------------
+    TTypedRingBuffer - public methods
+-------------------------------------------------------------------------------}
+
+constructor TTypedRingBuffer.Create(BaseTypeSize: TMemSize; Count: Integer);
+begin
+If Count > 0 then
+  begin
+    inherited Create(TMemSize(Count) * BaseTypeSize);
+    fBaseTypeSize := BaseTypeSize;
+  end
+else raise ETRBException.CreateFmt('TTypedRingBuffer.Create: Invalid count (%d)',[Count]);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TTypedRingBuffer.UsedCount: Integer;
+begin
+Result := UsedSpace div fBaseTypeSize;
+end;
+
+//------------------------------------------------------------------------------
+
+Function TTypedRingBuffer.FreeCount: Integer;
+begin
+Result := FreeSpace div fBaseTypeSize;
+end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                               TIntegerRingBuffer
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TIntegerRingBuffer - class declaration
+===============================================================================}
+{-------------------------------------------------------------------------------
+    TIntegerRingBuffer - private methods
+-------------------------------------------------------------------------------}
+
+Function TIntegerRingBuffer.GetValue(Index: Integer): Integer;
+begin
+If (Index >= 0) and (Index < Count) then
+  {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
+  Result := PInteger(PtrUInt(Memory) + (PtrUInt(Index) * SizeOf(Integer)))^
+  {$IFDEF FPCDWM}{$POP}{$ENDIF}
+else
+  raise EIRBIndexOutOfBounds.CreateFmt('TIntegerRingBuffer.GetValue: Index (%d) out of bounds.',[Index]);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TIntegerRingBuffer.SetValue(Index: Integer; Value: Integer);
+begin
+If (Index >= 0) and (Index < Count) then
+  {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
+  PInteger(PtrUInt(Memory) + (PtrUInt(Index) * SizeOf(Integer)))^ := Value
+  {$IFDEF FPCDWM}{$POP}{$ENDIF}
+else
+  raise EIRBIndexOutOfBounds.CreateFmt('TIntegerRingBuffer.SetValue: Index (%d) out of bounds.',[Index]);
+end;
+
+{-------------------------------------------------------------------------------
+    TIntegerRingBuffer - public methods
+-------------------------------------------------------------------------------}
+
+constructor TIntegerRingBuffer.Create(Count: Integer);
+begin
+inherited Create(SizeOf(Integer),Count);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TIntegerRingBuffer.Write(Value: Integer);
+begin
+If WriteBuff(Value,SizeOf(Integer)) <> SizeOf(Integer) then
+  raise EIRBWriteError.Create('TIntegerRingBuffer.Write: Writing error.');
+end;
+
+//------------------------------------------------------------------------------
+
+Function TIntegerRingBuffer.Write(Values: PInteger; Count: Integer): Integer;
+begin
+Result := WriteMem(Values,Count * SizeOf(Integer)) div SizeOf(Integer);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TIntegerRingBuffer.Write(Values: array of Integer): Integer;
+begin
+Result := Write(Addr(Values[Low(Values)]),Length(Values));
+end;
+
+//------------------------------------------------------------------------------
+
+Function TIntegerRingBuffer.Read: Integer;
+begin
+If ReadBuff(Result,SizeOf(Integer)) <> SizeOf(Integer) then
+  raise EIRBReadError.Create('TIntegerRingBuffer.Read: Reading error.');
+end;
+
+//------------------------------------------------------------------------------
+
+Function TIntegerRingBuffer.Read(out Value: Integer): Boolean;
+begin
+Result := ReadBuff(Value,SizeOf(Integer)) = SizeOf(Integer);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TIntegerRingBuffer.Read(Value: PInteger; Count: Integer): Integer;
+begin
+Result := ReadMem(Value,Count * SizeOf(Integer)) div SizeOf(Integer);
 end;
 
 end.
