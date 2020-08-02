@@ -23,7 +23,7 @@
 
   Version 1.1 (2020-01-02)
 
-  Last change 2020-01-02
+  Last change 2020-08-02
 
   ©2018-2020 František Milt
 
@@ -53,6 +53,7 @@ unit RingBuffer;
   {$DEFINE FPC_DisableWarns}
   {$MACRO ON}
 {$ENDIF}
+{$H+}
 
 interface
 
