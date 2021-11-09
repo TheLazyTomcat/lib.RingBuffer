@@ -69,6 +69,7 @@ type
   ERBIndexOutOfBounds = class(ERBException);
   ERBWriteError       = class(ERBException);
   ERBReadError        = class(ERBException);
+  ERBPeekError        = class(ERBException);
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -105,6 +106,8 @@ type
     Function WriteMem(Ptr: Pointer; Count: TMemSize): TMemSize; virtual;
     Function ReadBuff(out Buff; Count: TMemSize): TMemSize; virtual;
     Function ReadMem(Ptr: Pointer; Count: TMemSize): TMemSize; virtual;
+    Function PeekBuff(out Buff; Count: TMemSize): TMemSize; virtual;
+    Function PeekMem(Ptr: Pointer; Count: TMemSize): TMemSize; virtual;
     Function UsedSpace: TMemSize; virtual;
     Function FreeSpace: TMemSize; virtual;
     Function IsEmpty: Boolean; virtual;
@@ -145,6 +148,13 @@ type
     Function DoOverwrite(Count: TMemSize): Boolean; override;
   public
     constructor Create(BaseTypeSize: TMemSize; Count: Integer);
+    Function CheckIndex(Index: Integer): Boolean; virtual;
+    Function WriteBuff(const Buff; Count: TMemSize): TMemSize; override;
+    Function WriteMem(Ptr: Pointer; Count: TMemSize): TMemSize; override;
+    Function ReadBuff(out Buff; Count: TMemSize): TMemSize; override;
+    Function ReadMem(Ptr: Pointer; Count: TMemSize): TMemSize; override;
+    Function PeekBuff(out Buff; Count: TMemSize): TMemSize; override;
+    Function PeekMem(Ptr: Pointer; Count: TMemSize): TMemSize; override;
     Function UsedCount: Integer; virtual;
     Function FreeCount: Integer; virtual;
     property BaseTypeSize: TMemSize read fBaseTypeSize;
@@ -177,7 +187,11 @@ type
     Function Read: Integer; overload; virtual;
     Function Read(out Value: Integer): Boolean; overload; virtual;
     Function Read(Value: PInteger; Count: Integer): Integer; overload; virtual;
+    Function Peek: Integer; overload; virtual;
+    Function Peek(out Value: Integer): Boolean; overload; virtual;
+    Function Peek(Value: PInteger; Count: Integer): Integer; overload; virtual;
     property Values[Index: Integer]: Integer read GetValue write SetValue; default;
+    //property UsedValues[Index: Integer]: Integer read GetUsedValue write SetUsedValue;
   end;
 
 implementation
@@ -510,6 +524,39 @@ end;
 
 //------------------------------------------------------------------------------
 
+Function TRingBuffer.PeekBuff(out Buff; Count: TMemSize): TMemSize;
+begin
+Result := PeekMem(@Buff,Count);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TRingBuffer.PeekMem(Ptr: Pointer; Count: TMemSize): TMemSize;
+var
+  WritePtrTemp: Pointer;
+  ReadPtrTemp:  Pointer;
+  IsEmptyTemp:  Boolean;
+begin
+{
+  Let's not write almost the same code as in read...
+
+  Normally read the data, which in itself is not affecting them, and then just
+  restore changed properties to a state before reading.
+}
+WritePtrTemp := fWritePtr;
+ReadPtrTemp := fReadPtr;
+IsEmptyTemp := fIsEmpty;
+try
+  Result := ReadMem(Ptr,Count);
+finally
+  fWritePtr := WritePtrTemp;
+  fReadPtr := ReadPtrTemp;
+  fIsEmpty := IsEmptyTemp;
+end;
+end;
+
+//------------------------------------------------------------------------------
+
 Function TRingBuffer.UsedSpace: TMemSize;
 begin
 If fWritePtr <> fReadPtr then
@@ -651,6 +698,67 @@ end;
 
 //------------------------------------------------------------------------------
 
+Function TTypedRingBuffer.WriteBuff(const Buff; Count: TMemSize): TMemSize;
+begin
+Result := inherited WriteBuff(Buff,Count);
+If Result mod fBaseTypeSize <> 0 then
+  raise ERBWriteError.Create('TTypedRingBuffer.WriteBuff: Write error.');
+end;
+
+//------------------------------------------------------------------------------
+
+Function TTypedRingBuffer.WriteMem(Ptr: Pointer; Count: TMemSize): TMemSize;
+begin
+Result := inherited WriteMem(Ptr,Count);
+If Result mod fBaseTypeSize <> 0 then
+  raise ERBWriteError.Create('TTypedRingBuffer.WriteMem: Write error.');
+end;
+
+//------------------------------------------------------------------------------
+
+Function TTypedRingBuffer.ReadBuff(out Buff; Count: TMemSize): TMemSize;
+begin
+Result := inherited ReadBuff(Buff,Count);
+If Result mod fBaseTypeSize <> 0 then
+  raise ERBReadError.Create('TTypedRingBuffer.ReadBuff: Read error.');
+end;
+
+//------------------------------------------------------------------------------
+
+Function TTypedRingBuffer.ReadMem(Ptr: Pointer; Count: TMemSize): TMemSize;
+begin
+Result := inherited ReadMem(Ptr,Count);
+If Result mod fBaseTypeSize <> 0 then
+  raise ERBReadError.Create('TTypedRingBuffer.ReadMem: Read error.');
+end;
+
+//------------------------------------------------------------------------------
+
+Function TTypedRingBuffer.PeekBuff(out Buff; Count: TMemSize): TMemSize;
+begin
+Result := inherited PeekBuff(Buff,Count);
+If Result mod fBaseTypeSize <> 0 then
+  raise ERBPeekError.Create('TTypedRingBuffer.PeekBuff: Peek error.');
+end;
+
+//------------------------------------------------------------------------------
+
+Function TTypedRingBuffer.PeekMem(Ptr: Pointer; Count: TMemSize): TMemSize;
+begin
+Result := inherited PeekMem(Ptr,Count);
+If Result mod fBaseTypeSize <> 0 then
+  raise ERBPeekError.Create('TTypedRingBuffer.PeekMem: Peek error.');
+end;
+
+//------------------------------------------------------------------------------
+
+Function TTypedRingBuffer.CheckIndex(Index: Integer): Boolean;
+begin
+Result := (Index >= 0) and (Index < Count);
+end;
+
+//------------------------------------------------------------------------------
+
 Function TTypedRingBuffer.UsedCount: Integer;
 begin
 Result := UsedSpace div fBaseTypeSize;
@@ -677,7 +785,7 @@ end;
 
 Function TIntegerRingBuffer.GetValue(Index: Integer): Integer;
 begin
-If (Index >= 0) and (Index < Count) then
+If CheckIndex(Index) then
 {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
   Result := PInteger(PtrUInt(fMemory) + (PtrUInt(Index) * PtrUInt(fBaseTypeSize)))^
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
@@ -689,7 +797,7 @@ end;
 
 procedure TIntegerRingBuffer.SetValue(Index: Integer; Value: Integer);
 begin
-If (Index >= 0) and (Index < Count) then
+If CheckIndex(Index) then
 {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
   PInteger(PtrUInt(Memory) + (PtrUInt(Index) * PtrUInt(fBaseTypeSize)))^ := Value
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
@@ -708,18 +816,17 @@ end;
 
 procedure TIntegerRingBuffer.Write(Value: Integer);
 begin
-If WriteBuff(Value,fBaseTypeSize) <> fBaseTypeSize then
-  raise ERBWriteError.Create('TIntegerRingBuffer.Write: Write error.');
+WriteBuff(Value,fBaseTypeSize); // checks are done in the ancestor class
 end;
 
-//------------------------------------------------------------------------------
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 Function TIntegerRingBuffer.Write(Values: PInteger; Count: Integer): Integer;
 begin
 Result := WriteMem(Values,TMemSize(Count) * fBaseTypeSize) div fBaseTypeSize;
 end;
 
-//------------------------------------------------------------------------------
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 Function TIntegerRingBuffer.Write(Values: array of Integer): Integer;
 begin
@@ -733,22 +840,45 @@ end;
 
 Function TIntegerRingBuffer.Read: Integer;
 begin
-If ReadBuff(Result,fBaseTypeSize) <> fBaseTypeSize then
-  raise ERBReadError.Create('TIntegerRingBuffer.Read: Read error.');
+ReadBuff(Result,fBaseTypeSize);
 end;
 
-//------------------------------------------------------------------------------
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 Function TIntegerRingBuffer.Read(out Value: Integer): Boolean;
 begin
-Result := ReadBuff(Value,fBaseTypeSize) = fBaseTypeSize;
+ReadBuff(Value,fBaseTypeSize);
+// checking is now done in the ancestor class, but to keep backwards compatibility...
+Result := True;
 end;
 
-//------------------------------------------------------------------------------
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 Function TIntegerRingBuffer.Read(Value: PInteger; Count: Integer): Integer;
 begin
 Result := ReadMem(Value,TMemSize(Count) * fBaseTypeSize) div fBaseTypeSize;
+end;
+
+//------------------------------------------------------------------------------
+
+Function TIntegerRingBuffer.Peek: Integer;
+begin
+PeekBuff(Result,fBaseTypeSize);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function TIntegerRingBuffer.Peek(out Value: Integer): Boolean;
+begin
+PeekBuff(Value,fBaseTypeSize);
+Result := True;
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function TIntegerRingBuffer.Peek(Value: PInteger; Count: Integer): Integer;
+begin
+Result := PeekMem(Value,TMemSize(Count) * fBaseTypeSize) div fBaseTypeSize;
 end;
 
 end.
