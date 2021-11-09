@@ -10,22 +10,22 @@
   Ring buffer
 
     Simple and naive implementation of general ring buffer, also known as
-    circular buffer. Currently the buffer is implemented as size-invariant.
+    circular buffer.
 
     General buffer (TRingBuffer) can be used for any data as it operates on
     bytes and pointers. But if you want to create a typed ring buffer, there
     is a class TTypedRingBuffer created for that purpose. It should not be used
     directly, it is provided only as a base for other typed buffers. Create
-    its descendant and implement it on type you want.
+    its descendant and implement it for type you want.
 
     An integer ring buffer is implemented as a guideline for how to inherit
     from TTypedRingBuffer and create specialized ring buffers.
 
-  Version 1.1 (2020-01-02)
+  Version 1.2 (2021-11-10)
 
-  Last change 2020-08-02
+  Last change 2021-11-10
 
-  ©2018-2020 František Milt
+  ©2018-2021 František Milt
 
   Contacts:
     František Milt: frantisek.milt@gmail.com
@@ -61,6 +61,15 @@ uses
   SysUtils,
   AuxTypes, AuxClasses;
 
+type
+  ERBException = class(Exception);
+
+  ERBOverwriteError   = class(ERBException);
+  ERBInvalidValue     = class(ERBException);
+  ERBIndexOutOfBounds = class(ERBException);
+  ERBWriteError       = class(ERBException);
+  ERBReadError        = class(ERBException);
+
 {===============================================================================
 --------------------------------------------------------------------------------
                                    TRingBuffer
@@ -73,16 +82,12 @@ type
   TOverwriteEvent = procedure(Sender: TObject; Count: TMemSize) of object;
   TOverwriteCallback = procedure(Sender: TObject; Count: TMemSize);
 
-  ERBException = class(Exception);
-
-  ERBOverwriteError = class(ERBException);
-
 {===============================================================================
     TRingBuffer - class declaration
 ===============================================================================}
 type
   TRingBuffer = class(TCustomObject)
-  private
+  protected
     fMemory:              Pointer;
     fSize:                TMemSize;
     fWritePtr:            Pointer;
@@ -91,7 +96,7 @@ type
     fIsEmpty:             Boolean;
     fOnOverwriteEvent:    TOverwriteEvent;
     fOnOverwriteCallback: TOverwriteCallback;
-  protected
+    procedure SetSize(Value: TMemSize); virtual;
     Function DoOverwrite(Count: TMemSize): Boolean; virtual;
   public
     constructor Create(Size: TMemSize);
@@ -105,7 +110,7 @@ type
     Function IsEmpty: Boolean; virtual;
     Function IsFull: Boolean; virtual;
     property Memory: Pointer read fMemory;
-    property Size: TMemSize read fSize;
+    property Size: TMemSize read fSize write SetSize;
     property WritePtr: Pointer read fWritePtr;
     property ReadPtr: Pointer read fReadPtr;
     property OverwriteBehavior: TOverwriteBehavior read fOverwriteBehavior write fOverwriteBehavior;
@@ -119,33 +124,31 @@ type
                                 TTypedRingBuffer
 --------------------------------------------------------------------------------
 ===============================================================================}
-
 type
   TValueOverwriteEvent = procedure(Sender: TObject; Count: Integer) of object;
   TValueOverwriteCallback = procedure(Sender: TObject; Count: Integer);
-
-  ETRBException = class(ERBException);
 
 {===============================================================================
     TTypedRingBuffer - class declaration
 ===============================================================================}
 type
   TTypedRingBuffer = class(TRingBuffer)
-  private
+  protected
     fBaseTypeSize:              TMemSize;
     fOnValueOverwriteEvent:     TValueOverwriteEvent;
     fOnValueOverwriteCallback:  TValueOverwriteCallback;
-    Function GetCount: Integer;
-    Function GetWriteIndex: Integer;
-    Function GetReadIndex: Integer;
-  protected
+    procedure SetSize(Value: TMemSize); override;
+    Function GetCount: Integer; virtual;
+    procedure SetCount(Value: Integer); virtual;
+    Function GetWriteIndex: Integer; virtual;
+    Function GetReadIndex: Integer; virtual;
     Function DoOverwrite(Count: TMemSize): Boolean; override;
   public
     constructor Create(BaseTypeSize: TMemSize; Count: Integer);
     Function UsedCount: Integer; virtual;
     Function FreeCount: Integer; virtual;
     property BaseTypeSize: TMemSize read fBaseTypeSize;
-    property Count: Integer read GetCount;
+    property Count: Integer read GetCount write SetCount;
     property WriteIndex: Integer read GetWriteIndex;
     property ReadIndex: Integer read GetReadIndex;
     property OnValueOverwriteEvent: TValueOverwriteEvent read fOnValueOverwriteEvent write fOnValueOverwriteEvent;
@@ -158,22 +161,14 @@ type
                                TIntegerRingBuffer
 --------------------------------------------------------------------------------
 ===============================================================================}
-
-type
-  EIRBException = class(ETRBException);
-
-  EIRBIndexOutOfBounds = class(EIRBException);
-  EIRBWriteError       = class(EIRBException);
-  EIRBReadError        = class(EIRBException);  
-
 {===============================================================================
     TIntegerRingBuffer - class declaration
 ===============================================================================}
 type
   TIntegerRingBuffer = class(TTypedRingBuffer)
-  private
-    Function GetValue(Index: Integer): Integer;
-    procedure SetValue(Index: Integer; Value: Integer);
+  protected
+    Function GetValue(Index: Integer): Integer; virtual;
+    procedure SetValue(Index: Integer; Value: Integer); virtual;
   public
     constructor Create(Count: Integer);
     procedure Write(Value: Integer); overload; virtual;
@@ -205,6 +200,121 @@ implementation
     TRingBuffer - protected methods
 -------------------------------------------------------------------------------}
 
+procedure TRingBuffer.SetSize(Value: TMemSize);
+var
+  UsedSpaceBytes: TMemSize;
+  NewMem:         Pointer;
+begin
+If Value > 0 then
+  begin
+    If Value <> fSize then
+      begin
+      {
+        New value actually differs from current size, if they are equal then we
+        don't have to do anything.
+
+        If no data are buffered, then just free current allocation and create a
+        new one. But if there are any...
+      }
+        If UsedSpace > 0 then
+          begin
+            // there are buffered data
+            If Value > fSize then
+              begin
+              {
+                The buffer will be enlarged.
+
+                Allocate new memory and copy all the date there. Then free
+                the current buffer. No need for any complexities - all data
+                will fit into the new buffer since it is larger.
+              }
+                UsedSpaceBytes := UsedSpace;  // leave this here, do not move it up!
+                NewMem := AllocMem(Value);
+                ReadMem(NewMem,UsedSpaceBytes);
+                FreeMem(fMemory,fSize);
+                fMemory := NewMem;
+                fSize := Value;
+              {
+                Because new size is larger than the old one, the UsedSpaceBytes
+                cannot be larger or equal to new size, it must be smaller.
+                Therefore the write pointer cannot be be put at the end, so
+                no need to check for it.
+              }
+              {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
+                fWritePtr := Pointer(PtrUInt(fMemory) + PtrUInt(UsedSpaceBytes));
+              {$IFDEF FPCDWM}{$POP}{$ENDIF}
+                fReadPtr := fMemory;
+              end
+            else
+              begin
+              {
+                The buffer will be shrinked.
+
+                Allocate new memory, copy whatever data will fit into the new
+                memory and free current buffer.
+
+                Also signal overwrite if we will lose any data.
+              }
+                If UsedSpace > Value then
+                  If not DoOverwrite(UsedSpace - Value) then Exit;
+                UsedSpaceBytes := UsedSpace;  // used space could have changed, so it must be here
+                NewMem := AllocMem(Value);
+                If UsedSpaceBytes > Value then
+                  begin
+                  {
+                    Stored data will not fit into the new memory.
+
+                    Advance read pointer by the amount of bytes we will drop,
+                    then read all remaining bytes into new memory, free current
+                    memory and setup the buffer.
+                  }
+                  {$IFDEF FPCDWM}{$PUSH}W4055 W4056{$ENDIF}
+                    fReadPtr := Pointer(PtrUInt(fReadPtr) + PtrUInt(UsedSpaceBytes - Value));
+                    If PtrUInt(fReadPtr) >= (PtrUInt(fMemory) + PtrUInt(fSize)) then
+                      fReadPtr := Pointer(PtrUInt(fReadPtr) - PtrUInt(fSize));
+                  {$IFDEF FPCDWM}{$POP}{$ENDIF}
+                    ReadMem(NewMem,Value);
+                    FreeMem(fMemory,fSize);
+                    fMemory := NewMem;
+                    fSize := Value;
+                    fWritePtr := fMemory;
+                    fReadPtr := fMemory;
+                  end
+                else
+                  begin
+                    // stored data will fit into the new memory
+                    ReadMem(NewMem,UsedSpaceBytes);
+                    FreeMem(fMemory,fSize);
+                    fMemory := NewMem;
+                    fSize := Value;
+                    If UsedSpaceBytes < fSize then
+                    {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
+                      fWritePtr := Pointer(PtrUInt(fMemory) + PtrUInt(UsedSpaceBytes))
+                    else
+                      fWritePtr := fMemory;
+                    {$IFDEF FPCDWM}{$POP}{$ENDIF}
+                    fReadPtr := fMemory;
+                  end;
+              end;
+            fIsEmpty := False;
+          end
+        else
+          begin
+            // simple case, no data are buffered
+            FreeMem(fMemory,fSize);
+            fMemory := AllocMem(Value);
+            fSize := Value;
+            fWritePtr := fMemory;
+            fReadPtr := fMemory;
+            fIsEmpty := True;
+          end;
+      end;
+  end
+else raise ERBInvalidValue.CreateFmt('TRingBuffer.SetSize: Invalid size (%d).',[Value]);
+end;
+
+//------------------------------------------------------------------------------
+
 Function TRingBuffer.DoOverwrite(Count: TMemSize): Boolean;
 begin
 If Assigned(fOnOverwriteEvent) then
@@ -216,7 +326,7 @@ case fOverwriteBehavior of
   obDrop:       Result := False;
   obError:      raise ERBOverwriteError.CreateFmt('TRingBuffer: Overwriting %d bytes',[Count]);
 else
-  raise ERBException.CreateFmt('TRingBuffer.DoOverwrite: Invalid overwrite behavior (%d).',[Ord(fOverwriteBehavior)]);
+  raise ERBInvalidValue.CreateFmt('TRingBuffer.DoOverwrite: Invalid overwrite behavior (%d).',[Ord(fOverwriteBehavior)]);
 end;
 end;
 
@@ -227,8 +337,12 @@ end;
 constructor TRingBuffer.Create(Size: TMemSize);
 begin
 inherited Create;
-fMemory := AllocMem(Size);
-fSize := Size;
+If Size > 0 then
+  begin
+    fMemory := AllocMem(Size);
+    fSize := Size;
+  end
+else raise ERBInvalidValue.CreateFmt('TRingBuffer.Create: Invalid size (%d).',[Size]);
 fWritePtr := fMemory;
 fReadPtr := fMemory;
 fOverwriteBehavior := obOverwrite;
@@ -262,42 +376,55 @@ If Count > 0 then
   begin
     If Count < fSize then
       begin
+        // all data can fit into the buffer
         Overwrite := Count > FreeSpace;
         If Overwrite then
           If not DoOverwrite(Count - FreeSpace) then Exit;
+      {
+        Get how much bytes can be written from write pointer up to the end of
+        the buffer.
+      }
       {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
         HighWriteSpace := TMemSize(PtrUInt(fSize) - (PtrUInt(fWritePtr) - PtrUInt(fMemory)));
       {$IFDEF FPCDWM}{$POP}{$ENDIF}
-        // will it fit without splitting?
+        // will the data fit without splitting?
         If Count <= HighWriteSpace then
           begin
             // data will fit without splitting
             Move(Ptr^,fWritePtr^,Count);
-          {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
-            fWritePtr := Pointer(PtrUInt(fWritePtr) + PtrUInt(Count));
-            If PtrUInt(fWritePtr) >= (PtrUInt(fMemory) + PtrUInt(fSize)) then
+            If Count < HighWriteSpace then
+            {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
+              fWritePtr := Pointer(PtrUInt(fWritePtr) + PtrUInt(Count))
+            else
               fWritePtr := fMemory;
-          {$IFDEF FPCDWM}{$POP}{$ENDIF}
+            {$IFDEF FPCDWM}{$POP}{$ENDIF}
             Result := Count;
           end
         else
           begin
-            // splitting is required...
+          {
+            Splitting is required.
+            First write what can fit to the high write space, then write the
+            rest to the beginning of the buffer.
+          }
             Move(Ptr^,fWritePtr^,HighWriteSpace);
           {$IFDEF FPCDWM}{$PUSH}W4055 W4056{$ENDIF}
-            Move(Pointer(PtrUInt(Ptr) + HighWriteSpace)^,fMemory^,Count - HighWriteSpace);
-            fWritePtr := Pointer(PtrUInt(fMemory) + (Count - HighWriteSpace));
+            Move(Pointer(PtrUInt(Ptr) + PtrUInt(HighWriteSpace))^,fMemory^,Count - HighWriteSpace);
+            fWritePtr := Pointer(PtrUInt(fMemory) + PtrUInt(Count - HighWriteSpace));
           {$IFDEF FPCDWM}{$POP}{$ENDIF}
             Result := Count;
           end;
       end
     else
       begin
+      {
+        Data cannot fit into the buffer, or they exactly fill it.
+        Drop everything that is currently written in the buffer and store only
+        number of bytes from the end of passed data that can fit.
+      }
         Overwrite := UsedSpace > 0;
         If Overwrite then
           If not DoOverwrite(UsedSpace) then Exit;
-        // passed data cannot fit into the buffer,
-        // store only number of bytes from the end that can fit
       {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
         Move(Pointer(PtrUInt(Ptr) + PtrUInt(Count - fSize))^,fMemory^,fSize);
       {$IFDEF FPCDWM}{$POP}{$ENDIF}
@@ -328,26 +455,37 @@ begin
 Result := 0;
 If (Count > 0) and not IsEmpty then
   begin
+    // something is to be read and the buffer is not empty
   {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
     HighReadCount := TMemSize(PtrUInt(fSize) - (PtrUInt(fReadPtr) - PtrUInt(fMemory)));
   {$IFDEF FPCDWM}{$POP}{$ENDIF}
     UsedSpaceBytes := UsedSpace;
     If Count < UsedSpaceBytes then
       begin
-        // only part of the buffer will be consumed
+        // only part of the buffered data will be consumed
         If Count > HighReadCount then
           begin
+          {
+            Data are broken into two parts - one from the read pointer up to
+            the end of the buffer, and second from the start of the buffer.
+          }
             Move(fReadPtr^,Ptr^,HighReadCount);
           {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
             Move(fMemory^,Pointer(PtrUInt(Ptr) + PtrUInt(HighReadCount))^,Count - HighReadCount);
+            fReadPtr := Pointer(PtrUInt(fMemory) + PtrUInt(Count - HighReadCount));
           {$IFDEF FPCDWM}{$POP}{$ENDIF}
           end
-        else Move(fReadPtr^,Ptr^,Count);
-      {$IFDEF FPCDWM}{$PUSH}W4055 W4056{$ENDIF}
-        fReadPtr := Pointer(PtrUInt(fReadPtr) + PtrUInt(Count));
-        If PtrUInt(fReadPtr) >= (PtrUInt(fMemory) + PtrUInt(fSize)) then
-          fReadPtr := Pointer(PtrUInt(fReadPtr) - PtrUInt(fSize));
-      {$IFDEF FPCDWM}{$POP}{$ENDIF}
+        else
+          begin
+            // All data being read are stored before the end of the buffer.
+            Move(fReadPtr^,Ptr^,Count);
+            If Count < HighReadCount then
+            {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
+              fReadPtr := Pointer(PtrUInt(fReadPtr) + PtrUInt(Count))
+            else
+              fReadPtr := fMemory;
+            {$IFDEF FPCDWM}{$POP}{$ENDIF}
+          end;
         Result := Count;
       end
     else
@@ -355,6 +493,7 @@ If (Count > 0) and not IsEmpty then
         // all stored bytes will be consumed
         If HighReadCount <> UsedSpaceBytes then
           begin
+            // Again, data are broken into two parts - see above for details.
             Move(fReadPtr^,Ptr^,HighReadCount);
           {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
             Move(fMemory^,Pointer(PtrUInt(Ptr) + PtrUInt(HighReadCount))^,UsedSpaceBytes - HighReadCount);
@@ -375,6 +514,16 @@ Function TRingBuffer.UsedSpace: TMemSize;
 begin
 If fWritePtr <> fReadPtr then
   begin
+  {
+    Raad and write pointers differ.
+
+    If write pointer is above read pointer, it means the data are stored between
+    read pointer (lowed bound) and write pointer (upped bound).
+
+    If write pointer is below read pointer, it indicates that data are stored
+    from read pointer to the end of the buffer, and they then continue from
+    the start of the buffer up to the write pointer.
+  }
   {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
     If PtrUInt(fWritePtr) > PtrUInt(fReadPtr) then
       Result := TMemSize(PtrUInt(fWritePtr) - PtrUInt(fReadPtr))
@@ -384,6 +533,10 @@ If fWritePtr <> fReadPtr then
   end
 else
   begin
+  {
+    Read and write pointers are at the same position, it means the buffer is
+    either full, or completely empty.
+  }
     If fIsEmpty then
       Result := 0
     else
@@ -421,12 +574,32 @@ end;
     TTypedRingBuffer - class declaration
 ===============================================================================}
 {-------------------------------------------------------------------------------
-    TTypedRingBuffer - private methods
+    TTypedRingBuffer - protected methods
 -------------------------------------------------------------------------------}
+
+procedure TTypedRingBuffer.SetSize(Value: TMemSize);
+begin
+If Value mod fBaseTypeSize = 0 then
+  inherited SetSize(Value)
+else
+  raise ERBInvalidValue.CreateFmt('TTypedRingBuffer.SetSize: Invalid size (%d).',[Value]);
+end;
+
+//------------------------------------------------------------------------------
 
 Function TTypedRingBuffer.GetCount: Integer;
 begin
-Result := Integer(Size div fBaseTypeSize);
+Result := Integer(fSize div fBaseTypeSize);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TTypedRingBuffer.SetCount(Value: Integer);
+begin
+If Value > 0 then
+  SetSize(TMemSize(Value) * fBaseTypeSize)
+else
+  raise ERBInvalidValue.CreateFmt('TTypedRingBuffer.SetCount: Invalid count (%d).',[Value]);
 end;
 
 //------------------------------------------------------------------------------
@@ -434,7 +607,7 @@ end;
 Function TTypedRingBuffer.GetWriteIndex: Integer;
 begin
 {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
-Result := Integer((PtrUInt(WritePtr) - PtrUInt(Memory)) div fBaseTypeSize);
+Result := Integer((PtrUInt(fWritePtr) - PtrUInt(fMemory)) div fBaseTypeSize);
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
 end;
 
@@ -443,13 +616,11 @@ end;
 Function TTypedRingBuffer.GetReadIndex: Integer;
 begin
 {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
-Result := Integer((PtrUInt(ReadPtr) - PtrUInt(Memory)) div fBaseTypeSize);
+Result := Integer((PtrUInt(fReadPtr) - PtrUInt(fMemory)) div fBaseTypeSize);
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
 end;
 
-{-------------------------------------------------------------------------------
-    TTypedRingBuffer - protected methods
--------------------------------------------------------------------------------}
+//------------------------------------------------------------------------------
 
 Function TTypedRingBuffer.DoOverwrite(Count: TMemSize): Boolean;
 begin
@@ -468,10 +639,14 @@ constructor TTypedRingBuffer.Create(BaseTypeSize: TMemSize; Count: Integer);
 begin
 If Count > 0 then
   begin
-    inherited Create(TMemSize(Count) * BaseTypeSize);
-    fBaseTypeSize := BaseTypeSize;
+    If BaseTypeSize > 0 then
+      begin
+        inherited Create(TMemSize(Count) * BaseTypeSize);
+        fBaseTypeSize := BaseTypeSize;
+      end
+    else raise ERBInvalidValue.CreateFmt('TTypedRingBuffer.Create: Invalid base type size (%d)',[BaseTypeSize]);
   end
-else raise ETRBException.CreateFmt('TTypedRingBuffer.Create: Invalid count (%d)',[Count]);
+else raise ERBInvalidValue.CreateFmt('TTypedRingBuffer.Create: Invalid count (%d)',[Count]);
 end;
 
 //------------------------------------------------------------------------------
@@ -497,17 +672,17 @@ end;
     TIntegerRingBuffer - class declaration
 ===============================================================================}
 {-------------------------------------------------------------------------------
-    TIntegerRingBuffer - private methods
+    TIntegerRingBuffer - protected methods
 -------------------------------------------------------------------------------}
 
 Function TIntegerRingBuffer.GetValue(Index: Integer): Integer;
 begin
 If (Index >= 0) and (Index < Count) then
-  {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
-  Result := PInteger(PtrUInt(Memory) + (PtrUInt(Index) * SizeOf(Integer)))^
-  {$IFDEF FPCDWM}{$POP}{$ENDIF}
+{$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
+  Result := PInteger(PtrUInt(fMemory) + (PtrUInt(Index) * PtrUInt(fBaseTypeSize)))^
+{$IFDEF FPCDWM}{$POP}{$ENDIF}
 else
-  raise EIRBIndexOutOfBounds.CreateFmt('TIntegerRingBuffer.GetValue: Index (%d) out of bounds.',[Index]);
+  raise ERBIndexOutOfBounds.CreateFmt('TIntegerRingBuffer.GetValue: Index (%d) out of bounds.',[Index]);
 end;
 
 //------------------------------------------------------------------------------
@@ -515,16 +690,14 @@ end;
 procedure TIntegerRingBuffer.SetValue(Index: Integer; Value: Integer);
 begin
 If (Index >= 0) and (Index < Count) then
-  {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
-  PInteger(PtrUInt(Memory) + (PtrUInt(Index) * SizeOf(Integer)))^ := Value
-  {$IFDEF FPCDWM}{$POP}{$ENDIF}
+{$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
+  PInteger(PtrUInt(Memory) + (PtrUInt(Index) * PtrUInt(fBaseTypeSize)))^ := Value
+{$IFDEF FPCDWM}{$POP}{$ENDIF}
 else
-  raise EIRBIndexOutOfBounds.CreateFmt('TIntegerRingBuffer.SetValue: Index (%d) out of bounds.',[Index]);
+  raise ERBIndexOutOfBounds.CreateFmt('TIntegerRingBuffer.SetValue: Index (%d) out of bounds.',[Index]);
 end;
 
-{-------------------------------------------------------------------------------
-    TIntegerRingBuffer - public methods
--------------------------------------------------------------------------------}
+//------------------------------------------------------------------------------
 
 constructor TIntegerRingBuffer.Create(Count: Integer);
 begin
@@ -535,44 +708,47 @@ end;
 
 procedure TIntegerRingBuffer.Write(Value: Integer);
 begin
-If WriteBuff(Value,SizeOf(Integer)) <> SizeOf(Integer) then
-  raise EIRBWriteError.Create('TIntegerRingBuffer.Write: Writing error.');
+If WriteBuff(Value,fBaseTypeSize) <> fBaseTypeSize then
+  raise ERBWriteError.Create('TIntegerRingBuffer.Write: Write error.');
 end;
 
 //------------------------------------------------------------------------------
 
 Function TIntegerRingBuffer.Write(Values: PInteger; Count: Integer): Integer;
 begin
-Result := WriteMem(Values,Count * SizeOf(Integer)) div SizeOf(Integer);
+Result := WriteMem(Values,TMemSize(Count) * fBaseTypeSize) div fBaseTypeSize;
 end;
 
 //------------------------------------------------------------------------------
 
 Function TIntegerRingBuffer.Write(Values: array of Integer): Integer;
 begin
-Result := Write(Addr(Values[Low(Values)]),Length(Values));
+If Length(Values) > 0 then
+  Result := Write(Addr(Values[Low(Values)]),Length(Values))
+else
+  Result := 0;
 end;
 
 //------------------------------------------------------------------------------
 
 Function TIntegerRingBuffer.Read: Integer;
 begin
-If ReadBuff(Result,SizeOf(Integer)) <> SizeOf(Integer) then
-  raise EIRBReadError.Create('TIntegerRingBuffer.Read: Reading error.');
+If ReadBuff(Result,fBaseTypeSize) <> fBaseTypeSize then
+  raise ERBReadError.Create('TIntegerRingBuffer.Read: Read error.');
 end;
 
 //------------------------------------------------------------------------------
 
 Function TIntegerRingBuffer.Read(out Value: Integer): Boolean;
 begin
-Result := ReadBuff(Value,SizeOf(Integer)) = SizeOf(Integer);
+Result := ReadBuff(Value,fBaseTypeSize) = fBaseTypeSize;
 end;
 
 //------------------------------------------------------------------------------
 
 Function TIntegerRingBuffer.Read(Value: PInteger; Count: Integer): Integer;
 begin
-Result := ReadMem(Value,Count * SizeOf(Integer)) div SizeOf(Integer);
+Result := ReadMem(Value,TMemSize(Count) * fBaseTypeSize) div fBaseTypeSize;
 end;
 
 end.
