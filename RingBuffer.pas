@@ -61,6 +61,9 @@ uses
   SysUtils,
   AuxTypes, AuxClasses;
 
+{===============================================================================
+    Library-specific exceptions
+===============================================================================}
 type
   ERBException = class(Exception);
 
@@ -179,8 +182,11 @@ type
   protected
     Function GetValue(Index: Integer): Integer; virtual;
     procedure SetValue(Index: Integer; Value: Integer); virtual;
+    Function GetUsedValue(Index: Integer): Integer; virtual;
+    procedure SetUsedValue(Index: Integer; Value: Integer); virtual;
   public
     constructor Create(Count: Integer);
+    Function CheckUsedIndex(Index: Integer): Boolean; virtual;
     procedure Write(Value: Integer); overload; virtual;
     Function Write(Values: PInteger; Count: Integer): Integer; overload; virtual;
     Function Write(Values: array of Integer): Integer; overload; virtual;
@@ -191,7 +197,13 @@ type
     Function Peek(out Value: Integer): Boolean; overload; virtual;
     Function Peek(Value: PInteger; Count: Integer): Integer; overload; virtual;
     property Values[Index: Integer]: Integer read GetValue write SetValue; default;
-    //property UsedValues[Index: Integer]: Integer read GetUsedValue write SetUsedValue;
+  {
+    Note that items in UsedValues array property are indexed from current read
+    position (index 0) and there is UsedCount of them.
+
+    To check validity of index, use method CheckUsedIndex, NOT CheckIndex.
+  }
+    property UsedValues[Index: Integer]: Integer read GetUsedValue write SetUsedValue;
   end;
 
 implementation
@@ -228,7 +240,7 @@ If Value > 0 then
         don't have to do anything.
 
         If no data are buffered, then just free current allocation and create a
-        new one. But if there are any...
+        new one. But...
       }
         If UsedSpace > 0 then
           begin
@@ -505,7 +517,7 @@ If (Count > 0) and not IsEmpty then
     else
       begin
         // all stored bytes will be consumed
-        If HighReadCount <> UsedSpaceBytes then
+        If HighReadCount < UsedSpaceBytes then
           begin
             // Again, data are broken into two parts - see above for details.
             Move(fReadPtr^,Ptr^,HighReadCount);
@@ -799,7 +811,7 @@ procedure TIntegerRingBuffer.SetValue(Index: Integer; Value: Integer);
 begin
 If CheckIndex(Index) then
 {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
-  PInteger(PtrUInt(Memory) + (PtrUInt(Index) * PtrUInt(fBaseTypeSize)))^ := Value
+  PInteger(PtrUInt(fMemory) + (PtrUInt(Index) * PtrUInt(fBaseTypeSize)))^ := Value
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
 else
   raise ERBIndexOutOfBounds.CreateFmt('TIntegerRingBuffer.SetValue: Index (%d) out of bounds.',[Index]);
@@ -807,9 +819,38 @@ end;
 
 //------------------------------------------------------------------------------
 
+Function TIntegerRingBuffer.GetUsedValue(Index: Integer): Integer;
+begin
+If CheckUsedIndex(Index) then
+  Result := GetValue((ReadIndex + Index) mod Count)
+else
+  raise ERBIndexOutOfBounds.CreateFmt('TIntegerRingBuffer.GetUsedValue: Index (%d) out of bounds.',[Index]);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TIntegerRingBuffer.SetUsedValue(Index: Integer; Value: Integer);
+begin
+If CheckUsedIndex(Index) then
+  SetValue((ReadIndex + Index) mod Count,Value)
+else
+  raise ERBIndexOutOfBounds.CreateFmt('TIntegerRingBuffer.SetUsedValue: Index (%d) out of bounds.',[Index]);
+end;
+
+{-------------------------------------------------------------------------------
+    TIntegerRingBuffer - public methods
+-------------------------------------------------------------------------------}
+
 constructor TIntegerRingBuffer.Create(Count: Integer);
 begin
 inherited Create(SizeOf(Integer),Count);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TIntegerRingBuffer.CheckUsedIndex(Index: Integer): Boolean;
+begin
+Result := (Index >= 0) and (Index < UsedCount);
 end;
 
 //------------------------------------------------------------------------------
@@ -840,16 +881,15 @@ end;
 
 Function TIntegerRingBuffer.Read: Integer;
 begin
-ReadBuff(Result,fBaseTypeSize);
+If ReadBuff(Result,fBaseTypeSize) <> fBaseTypeSize then
+  raise ERBReadError.Create('TTypedRingBuffer.Read: Read error.');
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 Function TIntegerRingBuffer.Read(out Value: Integer): Boolean;
 begin
-ReadBuff(Value,fBaseTypeSize);
-// checking is now done in the ancestor class, but to keep backwards compatibility...
-Result := True;
+Result := ReadBuff(Value,fBaseTypeSize) = fBaseTypeSize;
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -863,15 +903,15 @@ end;
 
 Function TIntegerRingBuffer.Peek: Integer;
 begin
-PeekBuff(Result,fBaseTypeSize);
+If PeekBuff(Result,fBaseTypeSize) <> fBaseTypeSize then
+  raise ERBPeekError.Create('TTypedRingBuffer.Peek: Read error.');
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 Function TIntegerRingBuffer.Peek(out Value: Integer): Boolean;
 begin
-PeekBuff(Value,fBaseTypeSize);
-Result := True;
+Result := PeekBuff(Value,fBaseTypeSize) = fBaseTypeSize;
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
