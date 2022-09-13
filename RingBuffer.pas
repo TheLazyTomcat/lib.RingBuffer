@@ -23,9 +23,9 @@
 
   Version 1.2 (2021-11-10)
 
-  Last change 2021-11-10
+  Last change 2022-09-13
 
-  ©2018-2021 František Milt
+  ©2018-2022 František Milt
 
   Contacts:
     František Milt: frantisek.milt@gmail.com
@@ -344,8 +344,8 @@ end;
 Function TRingBuffer.DoOverwrite(Count: TMemSize): Boolean;
 begin
 If Assigned(fOnOverwriteEvent) then
-  fOnOverwriteEvent(Self,Count);
-If Assigned(fOnOverwriteCallback) then
+  fOnOverwriteEvent(Self,Count)
+else If Assigned(fOnOverwriteCallback) then
   fOnOverwriteCallback(Self,Count);
 case fOverwriteBehavior of
   obOverwrite:  Result := True;
@@ -684,8 +684,8 @@ end;
 Function TTypedRingBuffer.DoOverwrite(Count: TMemSize): Boolean;
 begin
 If Assigned(fOnValueOverwriteEvent) then
-  fOnValueOverwriteEvent(Self,Count div fBaseTypeSize);
-If Assigned(fOnValueOverwriteCallback) then
+  fOnValueOverwriteEvent(Self,Count div fBaseTypeSize)
+else If Assigned(fOnValueOverwriteCallback) then
   fOnValueOverwriteCallback(Self,Count div fBaseTypeSize);
 Result := inherited DoOverwrite(Count);
 end;
