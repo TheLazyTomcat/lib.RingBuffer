@@ -23,7 +23,7 @@
 
   Version 1.2 (2021-11-10)
 
-  Last change 2022-09-13
+  Last change 2022-09-24
 
   ©2018-2022 František Milt
 
@@ -49,7 +49,8 @@
 unit RingBuffer;
 
 {$IFDEF FPC}
-  {$MODE Delphi}
+  {$MODE ObjFPC}
+  {$MODESWITCH DuplicateLocals+}
   {$DEFINE FPC_DisableWarns}
   {$MACRO ON}
 {$ENDIF}
